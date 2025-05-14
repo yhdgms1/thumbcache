@@ -1,20 +1,16 @@
-
-
 # thumbcache
 
-[中文文档](README-CN.md)  
+利用Windows的thumbcache获取文件的BMP格式预览图。
 
-Uses Windows thumbcache to get bmp preview for a file.
+## 使用方法
 
-## Usage
-
-When trying to get preview from file that is not an image (.zip or .exe) will result in error.
+尝试获取非图片文件（如.zip或.exe）的预览会导致错误。
 
 ```rs
 use std::io::{Error, Write};
 
 pub fn main() -> Result<(), Error> {
-  let bmp = thumbcache::get_bmp(r"C:\path-to-file.jpeg", thumbcache::ThumbSize::S96)?;
+  let bmp = thumbcache::get_bmp(r"C:\文件路径.jpeg", thumbcache::ThumbSize::S96)?;
   
   let mut file_out = std::fs::File::create("./out.bmp")?;
   let _ = file_out.write_all(&bmp);
@@ -23,18 +19,18 @@ pub fn main() -> Result<(), Error> {
 }
 ```
 
-## Examples
+## 示例
 
-### Convert BMP into JPEG
+### 将BMP转换为JPEG
 
-Windows can only return BMP, but this format may not always be convenient. In this example, BMP is converted to JPEG using [image](https://github.com/image-rs/image) crate.
+Windows只能返回BMP格式，但有时这个格式可能不太方便。这个示例使用[image](https://github.com/image-rs/image) crate将BMP转换为JPEG。
 
 ```rs
 use thumbcache::{get_bmp};
 use image::{load_from_memory};
 
 fn main() {
-  let bmp = get_bmp(r"C:\path-to-file.jpeg", thumbcache::ThumbSize::S256).unwrap();
+  let bmp = get_bmp(r"C:\文件路径.jpeg", thumbcache::ThumbSize::S256).unwrap();
 
   let image = load_from_memory(&bmp).unwrap();
 
@@ -47,7 +43,7 @@ fn main() {
 }
 ```
 
-## Sources
+## 参考来源
 
 https://stackoverflow.com/questions/14207618/get-bytes-from-hbitmap
 
