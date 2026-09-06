@@ -1,29 +1,50 @@
 mod com;
 
 use crate::com::ComLibrary;
-use std::ffi::OsStr;
 use std::mem::size_of;
 use std::os::windows::ffi::OsStrExt;
-use windows::core::{Interface, PCWSTR};
-use windows::Win32::Foundation::SIZE;
+use std::path::Path;
+use windows::core::{Error, Interface, Owned, PCWSTR};
+use windows::Win32::Foundation::{E_FAIL, SIZE};
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetObjectW, BITMAP, BITMAPFILEHEADER,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
+    CreateCompatibleDC, DeleteDC, GetDIBits, GetObjectW, BITMAP, BITMAPFILEHEADER, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HDC,
 };
-use windows::Win32::UI::Shell::{
-    IShellItem, IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_THUMBNAILONLY,
+use windows::Win32::UI::Shell::{IShellItem, IShellItemImageFactory, SHCreateItemFromParsingName};
+
+pub use windows::Win32::UI::Shell::{
+    SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_CROPTOSQUARE, SIIGBF_ICONBACKGROUND, SIIGBF_ICONONLY,
+    SIIGBF_INCACHEONLY, SIIGBF_MEMORYONLY, SIIGBF_RESIZETOFIT, SIIGBF_SCALEUP, SIIGBF_THUMBNAILONLY,
+    SIIGBF_WIDETHUMBNAILS,
 };
 
 thread_local! {
     static COM_LIBRARY: ComLibrary = ComLibrary::init();
 }
 
-fn create_shell_item(file_name: &str) -> Result<IShellItem, windows::core::Error> {
-    let wide_file_name: Vec<u16> = OsStr::new(file_name).encode_wide().chain(Some(0)).collect();
+struct CompatibleDc(HDC);
+
+impl Drop for CompatibleDc {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = DeleteDC(self.0);
+            }
+        }
+    }
+}
+
+fn create_shell_item(file_path: &Path) -> Result<IShellItem, Error> {
+    let wide_file_name: Vec<u16> = file_path
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+
     unsafe { SHCreateItemFromParsingName(PCWSTR(wide_file_name.as_ptr()), None) }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum ThumbSize {
     /// 16x16 pixels
     S16,
@@ -64,92 +85,108 @@ impl ThumbSize {
     }
 }
 
-/// Returns thumbnail bitmap bits
-/// Thumbnail will be no larger than the specified width and height.
+/// Returns thumbnail bitmap bits.
 ///
-/// ```
-/// let bmp = thumbcache::get_bmp(r"C:\path-to-file.jpeg", thumbcache::ThumbSize::S96).unwrap()
-/// ```
-pub fn get_bmp(file_path: &str, size: ThumbSize) -> Result<Vec<u8>, windows::core::Error> {
+/// The thumbnail will be no larger than the specified width and height.
+/// On first use per thread this initializes COM as a multithreaded apartment.
+///
+/// This fails if Windows has no thumbnail.
+pub fn get_bmp(file_path: impl AsRef<Path>, size: ThumbSize) -> Result<Vec<u8>, Error> {
+    get_bmp_with(file_path, size, SIIGBF_THUMBNAILONLY)
+}
+
+/// Returns thumbnail bitmap bits using the given [`IShellItemImageFactory::GetImage`] flags.
+pub fn get_bmp_with(
+    file_path: impl AsRef<Path>,
+    size: ThumbSize,
+    flags: SIIGBF,
+) -> Result<Vec<u8>, Error> {
     COM_LIBRARY.with(|_| {});
 
-    let hbitmap = unsafe {
-        let shell_item = create_shell_item(file_path)?;
+    let hbitmap = {
+        let shell_item = create_shell_item(file_path.as_ref())?;
         let factory: IShellItemImageFactory = shell_item.cast()?;
 
-        factory.GetImage(size.to_size(), SIIGBF_THUMBNAILONLY)?
+        unsafe { Owned::new(factory.GetImage(size.to_size(), flags)?) }
     };
 
-    let hgdiobj: HGDIOBJ = hbitmap.into();
+    let mut bmp = BITMAP::default();
 
-    unsafe {
-        let mut bmp = BITMAP::default();
-
+    if unsafe {
         GetObjectW(
-            hgdiobj,
+            (*hbitmap).into(),
             size_of::<BITMAP>() as i32,
-            Some(&mut bmp as *mut _ as *mut _),
-        );
+            Some((&raw mut bmp).cast()),
+        )
+    } == 0
+    {
+        return Err(Error::from_hresult(E_FAIL));
+    }
 
-        let hdc = CreateCompatibleDC(None);
+    let hdc = unsafe { CreateCompatibleDC(None) };
 
-        let mut bitmap_info = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: bmp.bmWidth,
-                biHeight: -bmp.bmHeight,
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
+    if hdc.is_invalid() {
+        return Err(Error::from_hresult(E_FAIL));
+    }
+
+    let hdc = CompatibleDc(hdc);
+
+    let mut bitmap_info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: bmp.bmWidth,
+            biHeight: -bmp.bmHeight,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
             ..Default::default()
-        };
+        },
+        ..Default::default()
+    };
 
-        let byte_size = 4 * bmp.bmWidth.abs() * bmp.bmHeight.abs();
-        let mut bits = vec![0u8; byte_size as usize];
+    let mut bits = vec![0u8; 4 * bmp.bmWidth.unsigned_abs() as usize * bmp.bmHeight.unsigned_abs() as usize];
 
-        let get_di_bits_result = GetDIBits(
-            hdc,
-            hbitmap,
+    if unsafe {
+        GetDIBits(
+            hdc.0,
+            *hbitmap,
             0,
             bmp.bmHeight.unsigned_abs(),
-            Some(bits.as_mut_ptr() as _),
+            Some(bits.as_mut_ptr().cast()),
             &mut bitmap_info,
             DIB_RGB_COLORS,
-        );
-
-        let _ = DeleteDC(hdc);
-        let _ = DeleteObject(hgdiobj);
-
-        if get_di_bits_result == 0 {
-            return Err(windows::core::Error::from_thread());
-        }
-
-        let bitmap_header_size = size_of::<BITMAPFILEHEADER>() + size_of::<BITMAPINFOHEADER>();
-        let bitmap_file_size = bitmap_header_size + bits.len();
-
-        let file_header = BITMAPFILEHEADER {
-            bfType: 0x4D42,
-            bfSize: bitmap_file_size as u32,
-            bfOffBits: bitmap_header_size as u32,
-            ..Default::default()
-        };
-
-        let mut result = Vec::with_capacity(bitmap_file_size);
-
-        result.extend_from_slice(std::slice::from_raw_parts(
-            &file_header as *const _ as *const u8,
-            size_of::<BITMAPFILEHEADER>(),
-        ));
-
-        result.extend_from_slice(std::slice::from_raw_parts(
-            &bitmap_info.bmiHeader as *const _ as *const u8,
-            size_of::<BITMAPINFOHEADER>(),
-        ));
-
-        result.extend_from_slice(&bits);
-
-        Ok(result)
+        )
+    } == 0 {
+        return Err(Error::from_hresult(E_FAIL));
     }
+
+    let bitmap_header_size = size_of::<BITMAPFILEHEADER>() + size_of::<BITMAPINFOHEADER>();
+    let bitmap_file_size = bitmap_header_size + bits.len();
+
+    let file_header = BITMAPFILEHEADER {
+        bfType: 0x4D42,
+        bfSize: bitmap_file_size as u32,
+        bfOffBits: bitmap_header_size as u32,
+        ..Default::default()
+    };
+
+    let mut result = Vec::with_capacity(bitmap_file_size);
+
+    result.extend_from_slice(unsafe {
+        std::slice::from_raw_parts(
+            (&raw const file_header).cast(),
+            size_of::<BITMAPFILEHEADER>(),
+        )
+    });
+
+    result.extend_from_slice(unsafe {
+        std::slice::from_raw_parts(
+            (&raw const bitmap_info.bmiHeader).cast(),
+            size_of::<BITMAPINFOHEADER>(),
+        )
+    });
+
+    result.extend_from_slice(&bits);
+
+    Ok(result)
 }

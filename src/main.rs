@@ -1,10 +1,18 @@
 use std::io::{Error, Write};
+use thumbcache::{get_bmp_with, ThumbSize, SIIGBF_THUMBNAILONLY};
 
 pub fn main() -> Result<(), Error> {
-  let bmp = thumbcache::get_bmp(r"C:\path-to-file.jpeg", thumbcache::ThumbSize::S96)?;
+  let bmp = match get_bmp_with(r"C:\path-to-file.jpeg", ThumbSize::S96, SIIGBF_THUMBNAILONLY) {
+    Ok(bytes) => bytes,
+    Err(error) => {
+      println!("Error: {}", error);
+
+      return Ok(());
+    }
+  };
 
   let mut file_out = std::fs::File::create("./out.bmp")?;
-  let _ = file_out.write_all(&bmp);
-  
+  file_out.write_all(&bmp)?;
+
   Ok(())
 }
