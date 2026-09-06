@@ -1,8 +1,8 @@
 [package]
 name = "thumbcache"
 description = "Get file thumbnail on Windows"
-version = "0.4.0"
-edition = "2021"
+version = "0.5.0"
+edition = "2024"
 homepage = "https://github.com/yhdgms1/thumbcache"
 repository = "https://github.com/yhdgms1/thumbcache"
 readme = "README.md"
@@ -11,7 +11,7 @@ keywords = ["windows", "thumbnail", "preview"]
 exclude = ["src/main.rs"]
 
 [dependencies.windows]
-version = "0.61.1"
+version = "0.62.2"
 features = [
   "Win32_UI_Shell",
   "Win32_Graphics_Gdi",

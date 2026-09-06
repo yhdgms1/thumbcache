@@ -123,7 +123,7 @@ pub fn get_bmp(file_path: &str, size: ThumbSize) -> Result<Vec<u8>, windows::cor
         let _ = DeleteObject(hgdiobj);
 
         if get_di_bits_result == 0 {
-            return Err(windows::core::Error::from_win32());
+            return Err(windows::core::Error::from_thread());
         }
 
         let bitmap_header_size = size_of::<BITMAPFILEHEADER>() + size_of::<BITMAPINFOHEADER>();
