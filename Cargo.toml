@@ -1,8 +1,8 @@
 [package]
 name = "thumbcache"
 description = "Get file thumbnail on Windows"
-version = "0.6.0"
-edition = "2024"
+version = "0.7.0"
+edition = "2021"
 homepage = "https://github.com/yhdgms1/thumbcache"
 repository = "https://github.com/yhdgms1/thumbcache"
 readme = "README.md"
